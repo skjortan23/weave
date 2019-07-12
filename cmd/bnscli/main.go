@@ -43,6 +43,7 @@ var commands = map[string]func(input io.Reader, output io.Writer, args []string)
 	"keyaddr":                   cmdKeyaddr,
 	"keygen":                    cmdKeygen,
 	"multisig":                  cmdMultisig,
+	"query":                     cmdQuery,
 	"register-username":         cmdRegisterUsername,
 	"release-escrow":            cmdReleaseEscrow,
 	"reset-revenue":             cmdResetRevenue,
@@ -53,16 +54,16 @@ var commands = map[string]func(input io.Reader, output io.Writer, args []string)
 	"submit":                    cmdSubmitTransaction,
 	"tally":                     cmdTally,
 	"text-resolution":           cmdTextResolution,
-	"update-electorate":         cmdUpdateElectorate,
 	"update-election-rule":      cmdUpdateElectionRule,
+	"update-electorate":         cmdUpdateElectorate,
 	"version":                   cmdVersion,
 	"view":                      cmdTransactionView,
 	"vote":                      cmdVote,
+	"with-blockchain-address":   cmdWithBlockchainAddress,
+	"with-elector":              cmdWithElector,
 	"with-fee":                  cmdWithFee,
 	"with-multisig":             cmdWithMultisig,
-	"with-elector":              cmdWithElector,
 	"with-multisig-participant": cmdWithMultisigParticipant,
-	"with-blockchain-address":   cmdWithBlockchainAddress,
 }
 
 func main() {
