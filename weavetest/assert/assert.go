@@ -7,8 +7,15 @@ import (
 	"github.com/iov-one/weave/errors"
 )
 
+// Tester is the minimal subset of testing.TB needed to run most assert commands
+type Tester interface {
+	Helper()
+	Fatal(...interface{})
+	Fatalf(string, ...interface{})
+}
+
 // Nil fails the test if given value is not nil.
-func Nil(t testing.TB, value interface{}) {
+func Nil(t Tester, value interface{}) {
 	t.Helper()
 	if !isNil(value) {
 		// Use %+v so that if we are printing an error that supports
@@ -36,7 +43,7 @@ func isNil(value interface{}) (isnil bool) {
 }
 
 // Equal fails the test if two values are not equal.
-func Equal(t testing.TB, want, got interface{}) {
+func Equal(t Tester, want, got interface{}) {
 	t.Helper()
 	if !reflect.DeepEqual(want, got) {
 		t.Fatalf("values not equal \nwant %T %v\n got %T %v", want, want, got, got)
@@ -45,7 +52,7 @@ func Equal(t testing.TB, want, got interface{}) {
 
 // Panics will run given function and recover any panic. It will fail the test
 // if given function call did not panic.
-func Panics(t testing.TB, fn func()) {
+func Panics(t Tester, fn func()) {
 	t.Helper()
 	defer func() {
 		if recover() == nil {
@@ -104,4 +111,24 @@ func FieldError(t testing.TB, err error, fieldName string, want *errors.Error) {
 		}
 
 	}
+}
+
+// IsErr is a convenient helper that checks if the errors are a match
+// and prints out the difference if not as well as failing the assertion.
+func IsErr(t testing.TB, want, got error) {
+	t.Helper()
+
+	if want == got {
+		return
+	}
+
+	type comparator interface {
+		Is(error) bool
+	}
+
+	if want, ok := want.(comparator); ok && want.Is(got) {
+		return
+	}
+
+	t.Fatalf("want %q, got %+v", want, got)
 }

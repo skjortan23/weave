@@ -60,6 +60,8 @@ message ElectionRule {
   // The valid range for the threshold value is `0.5` to `1` (inclusive) which allows any value between half and all
   // of the eligible voters.
   Fraction quorum = 8;
+  // Address of this entity. Set during creation and does not change.
+  bytes address = 9 [(gogoproto.casttype) = "github.com/iov-one/weave.Address"];
 }
 
 // The Fraction type represents a numerator and denominator to enable higher precision thresholds in
@@ -140,6 +142,9 @@ message Proposal {
   }
   // Result is the final result based on the votes and election rule. Initial value is NotRun.
   ExecutorResult executor_result = 14;
+  // Tally task ID holds the ID of the asynchronous task that is scheduled to
+  // create the tally once the voting period is over.
+  bytes tally_task_id = 15 [(gogoproto.customname) = "TallyTaskID"];
 }
 
 // Resolution contains TextResolution and an electorate reference.
@@ -262,4 +267,12 @@ message UpdateElectionRuleMsg {
   // The valid range for the threshold value is `0.5` to `1` (inclusive) which allows any value between half and all
   // of the eligible voters.
   Fraction threshold = 4 [(gogoproto.nullable) = false];
+  // The quorum fraction of eligible voters is based on the total electorate
+  // weight and defines a threshold of votes that must be exceeded before the
+  // acceptance threshold is applied. This value requires any kind of votes
+  // and not only YES.
+  //
+  // The valid range for the threshold value is `0.5` to `1` (inclusive) which
+  // allows any value between half and all of the eligible voters.
+  Fraction quorum = 5;
 }

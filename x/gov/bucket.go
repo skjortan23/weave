@@ -7,6 +7,8 @@ import (
 	"github.com/iov-one/weave/orm"
 )
 
+const electionRuleSequence = "id"
+
 // ElectorateBucket is the persistent bucket for Electorate object.
 type ElectorateBucket struct {
 	orm.VersioningBucket
@@ -50,8 +52,13 @@ type ElectionRulesBucket struct {
 func NewElectionRulesBucket() *ElectionRulesBucket {
 	b := migration.NewBucket(packageName, "electnrule", orm.NewSimpleObj(nil, &ElectionRule{}))
 	return &ElectionRulesBucket{
-		VersioningBucket: orm.WithVersioning(orm.WithSeqIDGenerator(b, "id")),
+		VersioningBucket: orm.WithVersioning(orm.WithSeqIDGenerator(b, electionRuleSequence)),
 	}
+}
+
+func (b *ElectionRulesBucket) NextID(db weave.KVStore) ([]byte, error) {
+	rulesBucketSeq := b.Sequence(electionRuleSequence)
+	return rulesBucketSeq.NextVal(db)
 }
 
 func asElectionRule(obj orm.Object) (*ElectionRule, error) {
@@ -172,8 +179,8 @@ func asResolution(obj orm.Object) (*Resolution, error) {
 }
 
 const (
-	indexNameProposal = "proposal"
-	indexNameElector  = "elector"
+	indexNameProposal = "proposals"
+	indexNameElector  = "electors"
 )
 
 // VoteBucket is the persistence bucket for votes.

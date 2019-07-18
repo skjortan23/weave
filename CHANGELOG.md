@@ -2,13 +2,32 @@
 
 ## HEAD
 
+## 0.19.0
+- Remove `testify` dependency from our tests
+- A new extension `x/cron` is added. It allows to configure weave application
+  to be able to schedule messages for future execution.
+- Proposals created with `x/gov` are having their tally executed automatically
+  after the voting time is over. This is possible thanks to `x/cron` extension.
 - Add `owner` index to bnsd `x/username` to be able to query tokens by owner.
+- Allow empty targets in bnsd `x/username` to enable name reservation.
+- Allow to update election quorum.
+- Add self referencing `address` attribute to entities `aswap.Swap`,
+  `escrow.Contract`, `distribution.Revenue`, `multisig.Contract` `gov.ElectionRule` and
+  `paychan.PaymentChannel`.
 
 Breaking changes
 
+- `weave.Ticker` interface was updated.
+- Add `owner` index to bnsd `x/username` to be able to query tokens by owner.
+- Allow empty targets in bnsd `x/username` to enable name reservation.
 - Username address type in `x/username` extension was changed from `[]byte` to
   `string`. Instead of base64 encoded value, a valid string is stored as the
   address.
+- Some of the query paths in the `x/gov` package were updated to follow the
+  naming convention.
+- `gov.TallyMsg` is no longer available. Tally is created automatically when
+  the voting time is over.
+
 
 
 ## 0.18.0

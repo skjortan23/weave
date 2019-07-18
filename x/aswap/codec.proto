@@ -26,6 +26,8 @@ message Swap {
   int64 timeout = 6 [(gogoproto.casttype) = "github.com/iov-one/weave.UnixTime"];
   // max length 128 characters
   string memo = 7;
+  // Address of this entity. Set during creation and does not change.
+  bytes address = 8 [(gogoproto.casttype) = "github.com/iov-one/weave.Address"];
 }
 
 // CreateMsg creates a Swap with some coins.
@@ -54,9 +56,9 @@ message ReleaseMsg {
   bytes preimage = 3;
 }
 
-// ReturnSwapMsg releases the tokens to the source.
+// ReturnMsg releases the tokens to the source.
 // This operation only works if the Swap is expired.
-message ReturnSwapMsg {
+message ReturnMsg {
   weave.Metadata metadata = 1;
   // swap_id to return
   bytes swap_id = 2 [(gogoproto.customname) = "SwapID"];

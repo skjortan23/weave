@@ -350,8 +350,9 @@ func TestCreateTextProposal(t *testing.T) {
 				Signers: spec.Signers,
 			}
 			rt := app.NewRouter()
+			cron := &weavetest.Cron{}
 			// We don't run the executor here, so we can safely pass in nil.
-			RegisterRoutes(rt, auth, decodeProposalOptions, nil)
+			RegisterRoutes(rt, auth, decodeProposalOptions, nil, cron)
 
 			db := store.MemStore()
 			migration.MustInitPkg(db, packageName)
@@ -389,13 +390,24 @@ func TestCreateTextProposal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %s", err)
 			}
-			if exp, got := p, &spec.Exp; !reflect.DeepEqual(exp, got) {
-				t.Logf("exp: %+v", exp)
-				t.Logf("got: %+v", got)
-				t.Fatal("unexpected proposal state")
-			}
+
+			assertProposalsEqual(t, spec.Exp, *p)
 			cache.Discard()
 		})
+	}
+}
+
+func assertProposalsEqual(t testing.TB, a, b Proposal) {
+	t.Helper()
+
+	// TallyTaskID is a random value that we do not care about.
+	a.TallyTaskID = nil
+	b.TallyTaskID = nil
+
+	if !reflect.DeepEqual(a, b) {
+		t.Logf("a: %#v", a)
+		t.Logf("b: %#v", b)
+		t.Fatal("unexpected proposal state")
 	}
 }
 
@@ -456,7 +468,7 @@ func TestDeleteProposal(t *testing.T) {
 				Signer: spec.SignedBy,
 			}
 			rt := app.NewRouter()
-			RegisterRoutes(rt, auth, decodeProposalOptions, nil)
+			RegisterRoutes(rt, auth, decodeProposalOptions, nil, &weavetest.Cron{})
 
 			// given
 			ctx := weave.WithBlockTime(context.Background(), time.Now().Round(time.Second))
@@ -763,7 +775,7 @@ func TestVote(t *testing.T) {
 				Signer: spec.SignedBy,
 			}
 			rt := app.NewRouter()
-			RegisterRoutes(rt, auth, decodeProposalOptions, nil)
+			RegisterRoutes(rt, auth, decodeProposalOptions, nil, &weavetest.Cron{})
 
 			// given
 			ctx := weave.WithBlockTime(context.Background(), time.Now().Round(time.Second))
@@ -819,7 +831,6 @@ func TestTally(t *testing.T) {
 	specs := map[string]struct {
 		Mods              func(weave.Context, *Proposal)
 		Src               tallySetup
-		WantCheckErr      *errors.Error
 		WantDeliverErr    *errors.Error
 		WantDeliverLog    string
 		ExpResult         Proposal_Result
@@ -1196,7 +1207,6 @@ func TestTally(t *testing.T) {
 				threshold:             Fraction{Numerator: 1, Denominator: 2},
 				totalWeightElectorate: 11,
 			},
-			WantCheckErr:      errors.ErrState,
 			WantDeliverErr:    errors.ErrState,
 			ExpResult:         Proposal_Accepted,
 			ExpExecutorResult: Proposal_Success,
@@ -1210,7 +1220,6 @@ func TestTally(t *testing.T) {
 				threshold:             Fraction{Numerator: 1, Denominator: 2},
 				totalWeightElectorate: 11,
 			},
-			WantCheckErr:   errors.ErrState,
 			WantDeliverErr: errors.ErrState,
 			ExpResult:      Proposal_Undefined,
 			WantDeliverLog: "Proposal not accepted",
@@ -1223,7 +1232,6 @@ func TestTally(t *testing.T) {
 				threshold:             Fraction{Numerator: 1, Denominator: 2},
 				totalWeightElectorate: 11,
 			},
-			WantCheckErr:   errors.ErrState,
 			WantDeliverErr: errors.ErrState,
 			ExpResult:      Proposal_Undefined,
 			WantDeliverLog: "Proposal not accepted",
@@ -1236,24 +1244,20 @@ func TestTally(t *testing.T) {
 				threshold:             Fraction{Numerator: 1, Denominator: 2},
 				totalWeightElectorate: 11,
 			},
-			WantCheckErr:   errors.ErrState,
 			WantDeliverErr: errors.ErrState,
 			ExpResult:      Proposal_Undefined,
 			WantDeliverLog: "Proposal not accepted",
 		},
 	}
-	auth := &weavetest.Auth{
-		Signer: hAliceCond,
-	}
 	rt := app.NewRouter()
-	RegisterRoutes(rt, auth, decodeProposalOptions, proposalOptionsExecutor())
+	// Tally is registered for the cron, not for the usual routes.
+	RegisterCronRoutes(rt, nil, decodeProposalOptions, proposalOptionsExecutor())
 
 	for msg, spec := range specs {
 		t.Run(msg, func(t *testing.T) {
 			db := store.MemStore()
 			migration.MustInitPkg(db, packageName)
 
-			// given
 			ctx := weave.WithBlockTime(context.Background(), time.Now().Round(time.Second))
 			setupForTally := func(_ weave.Context, p *Proposal) {
 				p.VoteState = NewTallyResult(spec.Src.quorum, spec.Src.threshold, spec.Src.totalWeightElectorate)
@@ -1266,17 +1270,14 @@ func TestTally(t *testing.T) {
 			if spec.Init != nil {
 				spec.Init(t, db)
 			}
-			cache := db.CacheWrap()
 
-			// when check is called
-			tx := &weavetest.Tx{Msg: &TallyMsg{Metadata: &weave.Metadata{Schema: 1}, ProposalID: weavetest.SequenceID(1)}}
-			if _, err := rt.Check(ctx, cache, tx); !spec.WantCheckErr.Is(err) {
-				t.Fatalf("check expected: %+v  but got %+v", spec.WantCheckErr, err)
+			tx := &weavetest.Tx{
+				Msg: &TallyMsg{
+					Metadata:   &weave.Metadata{Schema: 1},
+					ProposalID: weavetest.SequenceID(1),
+				},
 			}
 
-			cache.Discard()
-
-			// and when deliver is called
 			dres, err := rt.Deliver(ctx, db, tx)
 			if !spec.WantDeliverErr.Is(err) {
 				t.Fatalf("deliver expected: %+v  but got %+v", spec.WantDeliverErr, err)
@@ -1288,8 +1289,8 @@ func TestTally(t *testing.T) {
 				t.Errorf("want Log: %s\ngot Log: %s", spec.WantDeliverLog, dres.Log)
 			}
 
-			// and check persisted result
-			p, err := pBucket.GetProposal(cache, weavetest.SequenceID(1))
+			// check persisted result
+			p, err := pBucket.GetProposal(db, weavetest.SequenceID(1))
 			if err != nil {
 				t.Fatalf("unexpected error: %s", err)
 			}
@@ -1303,10 +1304,8 @@ func TestTally(t *testing.T) {
 				t.Errorf("expected %v but got %v", exp, got)
 			}
 			if spec.PostChecks != nil {
-				spec.PostChecks(t, cache)
+				spec.PostChecks(t, db)
 			}
-
-			cache.Discard()
 		})
 	}
 }
@@ -1427,7 +1426,7 @@ func TestUpdateElectorate(t *testing.T) {
 				Signer: spec.SignedBy,
 			}
 			rt := app.NewRouter()
-			RegisterRoutes(rt, auth, decodeProposalOptions, nil)
+			RegisterRoutes(rt, auth, decodeProposalOptions, nil, &weavetest.Cron{})
 			db := store.MemStore()
 			migration.MustInitPkg(db, packageName)
 
@@ -1493,6 +1492,7 @@ func TestUpdateElectionRules(t *testing.T) {
 				Title:        "barr",
 				VotingPeriod: weave.AsUnixDuration(12 * time.Hour),
 				Threshold:    Fraction{Numerator: 2, Denominator: 3},
+				Address:      Condition(electionRulesID).Address(),
 			},
 		},
 		"Update with max voting time": {
@@ -1511,6 +1511,7 @@ func TestUpdateElectionRules(t *testing.T) {
 				Title:        "barr",
 				VotingPeriod: weave.AsUnixDuration(24 * 7 * 4 * time.Hour),
 				Threshold:    Fraction{Numerator: 2, Denominator: 3},
+				Address:      Condition(electionRulesID).Address(),
 			},
 		},
 		"Update by non owner should fail": {
@@ -1523,6 +1524,48 @@ func TestUpdateElectionRules(t *testing.T) {
 			SignedBy:       hAliceCond,
 			WantCheckErr:   errors.ErrUnauthorized,
 			WantDeliverErr: errors.ErrUnauthorized,
+		},
+		"Update can set a new quorum rule": {
+			Msg: UpdateElectionRuleMsg{
+				Metadata:       &weave.Metadata{Schema: 1},
+				ElectionRuleID: electionRulesID,
+				VotingPeriod:   weave.AsUnixDuration(24 * 7 * 4 * time.Hour),
+				Threshold:      Fraction{Numerator: 2, Denominator: 3},
+				Quorum:         &Fraction{Numerator: 6, Denominator: 7},
+			},
+			SignedBy: hBobbyCond,
+			ExpModel: &ElectionRule{
+				Metadata:     &weave.Metadata{Schema: 1},
+				Version:      2,
+				Admin:        hBobby,
+				ElectorateID: weavetest.SequenceID(1),
+				Title:        "barr",
+				VotingPeriod: weave.AsUnixDuration(24 * 7 * 4 * time.Hour),
+				Threshold:    Fraction{Numerator: 2, Denominator: 3},
+				Quorum:       &Fraction{Numerator: 6, Denominator: 7},
+				Address:      Condition(electionRulesID).Address(),
+			},
+		},
+		"Update can unset quorum rule": {
+			Msg: UpdateElectionRuleMsg{
+				Metadata:       &weave.Metadata{Schema: 1},
+				ElectionRuleID: electionRulesID,
+				VotingPeriod:   weave.AsUnixDuration(24 * 7 * 4 * time.Hour),
+				Threshold:      Fraction{Numerator: 2, Denominator: 3},
+				Quorum:         nil,
+			},
+			SignedBy: hBobbyCond,
+			ExpModel: &ElectionRule{
+				Metadata:     &weave.Metadata{Schema: 1},
+				Version:      2,
+				Admin:        hBobby,
+				ElectorateID: weavetest.SequenceID(1),
+				Title:        "barr",
+				VotingPeriod: weave.AsUnixDuration(24 * 7 * 4 * time.Hour),
+				Threshold:    Fraction{Numerator: 2, Denominator: 3},
+				Quorum:       nil,
+				Address:      Condition(electionRulesID).Address(),
+			},
 		},
 		"Threshold must be valid": {
 			Msg: UpdateElectionRuleMsg{
@@ -1565,7 +1608,7 @@ func TestUpdateElectionRules(t *testing.T) {
 				Signer: spec.SignedBy,
 			}
 			rt := app.NewRouter()
-			RegisterRoutes(rt, auth, decodeProposalOptions, nil)
+			RegisterRoutes(rt, auth, decodeProposalOptions, nil, &weavetest.Cron{})
 			db := store.MemStore()
 			migration.MustInitPkg(db, packageName)
 

@@ -15,6 +15,7 @@ import (
 	"github.com/iov-one/weave/cmd/bnsd/x/username"
 	"github.com/iov-one/weave/coin"
 	"github.com/iov-one/weave/commands/server"
+	"github.com/iov-one/weave/errors"
 	"github.com/iov-one/weave/migration"
 	"github.com/iov-one/weave/orm"
 	"github.com/iov-one/weave/store/iavl"
@@ -22,6 +23,7 @@ import (
 	"github.com/iov-one/weave/x/aswap"
 	"github.com/iov-one/weave/x/batch"
 	"github.com/iov-one/weave/x/cash"
+	"github.com/iov-one/weave/x/cron"
 	"github.com/iov-one/weave/x/currency"
 	"github.com/iov-one/weave/x/distribution"
 	"github.com/iov-one/weave/x/escrow"
@@ -63,14 +65,15 @@ func Chain(authFn x.Authenticator, minFee coin.Coin) app.Decorators {
 	)
 }
 
+// ctrl can be initialized with any implementation, but must be used
+// consistently everywhere.
+var ctrl = cash.NewController(cash.NewBucket())
+
 // Router returns a default router, only dispatching to the
 // cash.SendMsg
 func Router(authFn x.Authenticator, issuer weave.Address) *app.Router {
 	r := app.NewRouter()
-
-	// ctrl can be initialized with any implementation, but must be used
-	// consistently everywhere.
-	var ctrl cash.Controller = cash.NewController(cash.NewBucket())
+	scheduler := cron.NewScheduler(CronTaskMarshaler)
 
 	migration.RegisterRoutes(r, authFn)
 	cash.RegisterRoutes(r, authFn, ctrl)
@@ -83,7 +86,7 @@ func Router(authFn x.Authenticator, issuer weave.Address) *app.Router {
 	distribution.RegisterRoutes(r, authFn, ctrl)
 	sigs.RegisterRoutes(r, authFn)
 	aswap.RegisterRoutes(r, authFn, ctrl)
-	gov.RegisterRoutes(r, authFn, decodeProposalOptions, proposalOptionsExecutor(ctrl))
+	gov.RegisterRoutes(r, authFn, decodeProposalOptions, proposalOptionsExecutor(ctrl), scheduler)
 	username.RegisterRoutes(r, authFn)
 	return r
 }
@@ -107,6 +110,7 @@ func QueryRouter(minFee coin.Coin) weave.QueryRouter {
 		aswap.RegisterQuery,
 		gov.RegisterQuery,
 		username.RegisterQuery,
+		cron.RegisterQuery,
 	)
 	return r
 }
@@ -118,19 +122,50 @@ func Stack(issuer weave.Address, minFee coin.Coin) weave.Handler {
 	return Chain(authFn, minFee).WithHandler(Router(authFn, issuer))
 }
 
+// CronStack wires up a standard router with a cron specific decorator chain.
+// This can be passed into BaseApp.
+// Cron stack configuration is a subset of the main stack. It is using the same
+// components but not all functionalities are needed or expected (ie no message
+// fee).
+func CronStack() weave.Handler {
+	rt := app.NewRouter()
+
+	authFn := cron.Authenticator{}
+
+	// Cron is using custom router as not the same handlers are registered.
+	gov.RegisterCronRoutes(rt, authFn, decodeProposalOptions, proposalOptionsExecutor(ctrl))
+	distribution.RegisterRoutes(rt, authFn, ctrl)
+	escrow.RegisterRoutes(rt, authFn, ctrl)
+	aswap.RegisterRoutes(rt, authFn, ctrl)
+
+	decorators := app.ChainDecorators(
+		utils.NewLogging(),
+		utils.NewRecovery(),
+		utils.NewKeyTagger(),
+		utils.NewActionTagger(),
+		// No fee decorators.
+	)
+	return decorators.WithHandler(rt)
+}
+
 // Application constructs a basic ABCI application with
 // the given arguments. If you are not sure what to use
 // for the Handler, just use Stack().
-func Application(name string, h weave.Handler,
-	tx weave.TxDecoder, dbPath string, options *server.Options) (app.BaseApp, error) {
-
+func Application(
+	name string,
+	h weave.Handler,
+	tx weave.TxDecoder,
+	dbPath string,
+	options *server.Options,
+) (app.BaseApp, error) {
 	ctx := context.Background()
 	kv, err := CommitKVStore(dbPath)
 	if err != nil {
-		return app.BaseApp{}, err
+		return app.BaseApp{}, errors.Wrap(err, "cannot create store")
 	}
 	store := app.NewStoreApp(name, kv, QueryRouter(options.MinFee), ctx)
-	base := app.NewBaseApp(store, tx, h, nil, options.Debug)
+	ticker := cron.NewTicker(CronStack(), CronTaskMarshaler)
+	base := app.NewBaseApp(store, tx, h, ticker, options.Debug)
 	return base, nil
 }
 
