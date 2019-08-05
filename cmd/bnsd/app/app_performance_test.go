@@ -1,12 +1,15 @@
 package bnsd
 
 import (
+	"encoding/json"
 	"io/ioutil"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/iov-one/weave"
+	"github.com/iov-one/weave/cmd/bnsd/x/username"
 	"github.com/iov-one/weave/coin"
 	"github.com/iov-one/weave/commands/server"
 	"github.com/iov-one/weave/weavetest"
@@ -220,4 +223,118 @@ func newBnsd(t testing.TB) (abci.Application, func()) {
 		os.RemoveAll(homeDir)
 	}
 	return bnsd, cleanup
+}
+
+func BenchmarkLiveSendMsg(b *testing.B) {
+	const tmAddr = "https://rpc.lovenet.iov.one:443"
+	cases := map[string]struct {
+		NumTx int
+		Tx    weave.Tx
+	}{
+		"10 username.ChangeTokenTargetsMsg": {
+			NumTx: 10,
+			Tx: &Tx{
+				Sum: &Tx_UsernameChangeTokenTargetsMsg{
+					UsernameChangeTokenTargetsMsg: &username.ChangeTokenTargetsMsg{
+						Metadata: &weave.Metadata{Schema: 1},
+						Username: "alicebench*iov",
+						NewTargets: []username.BlockchainAddress{
+							{BlockchainID: "an-id", Address: "an-address"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for testName, tc := range cases {
+		b.Run(testName, func(b *testing.B) {
+
+			benchmarkTxSend(b, tmAddr, tc.Tx, tc.NumTx)
+		})
+	}
+}
+
+func benchmarkTxSend(b *testing.B, tmAddr string, tx weave.Tx, numTx int) {
+	rawTx, err := tx.Marshal()
+	if err != nil {
+		b.Fatalf("cannot marshal transaction: %s", err)
+	}
+
+	wsMsgs := make([]*websocket.PreparedMessage, 0, numTx)
+	for i := 0; i < numTx; i++ {
+		req, err := json.Marshal(jsonrpcRequest{
+			ID:      i,
+			Version: "2.0",
+			Method:  "broadcast_tx_commit",
+			Params:  rawTx,
+		})
+		if err != nil {
+			b.Fatalf("cannot marshal a request: %s", err)
+		}
+
+		wsMsg, err := websocket.NewPreparedMessage(websocket.TextMessage, req)
+		if err != nil {
+			b.Fatalf("cannot prepare websocket message: %s", err)
+		}
+		wsMsgs = append(wsMsgs, wsMsg)
+	}
+
+	conn, _, err := websocket.DefaultDialer.Dial(tmAddr+"/websocket", nil)
+	if err != nil {
+		b.Fatalf("cannot create a websocket connection: %s", err)
+	}
+	defer conn.Close()
+
+	b.ResetTimer()
+
+	// Write all prepared transaction messages. Response will be consumed
+	// in the main thread.
+	go func() {
+		for n, msg := range wsMsgs {
+			if err := conn.WritePreparedMessage(msg); err != nil {
+				b.Errorf("cannot write #%d websocket message: %s", n, err)
+			}
+		}
+	}()
+
+	for n := 0; n < numTx; n++ {
+		var resp jsonrpcResponse
+		if err := conn.ReadJSON(&resp); err != nil {
+			b.Fatalf("cannot read response: %s", err)
+		}
+		if resp.Error.Code != 0 {
+			b.Errorf("failed response received: %+v", resp.Error)
+		}
+	}
+}
+
+type jsonrpcRequest struct {
+	Version string `json:"jsonrpc"`
+	ID      int    `json:"id"`
+	Method  string `json:"method"`
+	Params  []byte `json:"params"`
+}
+
+type jsonrpcResponse struct {
+	Version string `json:"jsonrpc"`
+	ID      int    `json:"id"`
+	Error   struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    []byte `json:"data"`
+	} `json:"error"`
+	Result struct {
+		Height  int `json:"height"`
+		CheckTx struct {
+			Code string `json:"code"`
+			Log  string `json:"log"`
+			Data string `json:"data"`
+		} `json:"check_tx"`
+		DeliverTx struct {
+			Code string `json:"code"`
+			Log  string `json:"log"`
+			Data string `json:"data"`
+		} `json:"deliver_tx"`
+	} `json:"result"`
 }
