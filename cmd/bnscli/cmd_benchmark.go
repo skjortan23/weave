@@ -48,7 +48,7 @@ prepareTx:
 		req, err := json.Marshal(jsonrpcRequest{
 			ID:      i,
 			Version: "2.0",
-			Method:  "broadcast_tx_commit",
+			Method:  "broadcast_tx_sync",
 			Params:  [][]byte{rawTx},
 		})
 		if err != nil {
@@ -88,6 +88,7 @@ prepareTx:
 	}()
 
 	var recvStats bytes.Buffer
+	recvStart := time.Now()
 	for n := range toConsume {
 		var resp jsonrpcResponse
 		if err := conn.ReadJSON(&resp); err != nil {
@@ -98,16 +99,45 @@ prepareTx:
 			fmt.Fprintf(&recvStats, "FAIL: #%d: failed response received: %+v\n", n, resp.Error)
 			continue
 		}
-		if c := resp.Result.CheckTx; c.Code != 0 {
-			fmt.Fprintf(&recvStats, "FAIL: #%d: failed check: %d: %s\n", n, c.Code, c.Log)
+		var check checkResult
+		if err := json.Unmarshal(resp.Result, &check); err != nil {
+			fmt.Fprintf(&recvStats, "FAIL: #%d: failed parsing check response: %+v\n", n, err)
 			continue
 		}
-		if d := resp.Result.DeliverTx; d.Code != 0 {
-			fmt.Fprintf(&recvStats, "FAIL: #%d: failed deliver: %d: %s\n", n, d.Code, d.Log)
+		if check.Code != 0 {
+			fmt.Fprintf(&recvStats, "FAIL: #%d: check failed: %d %s\n", n, check.Code, check.Log)
 			continue
 		}
 	}
-	fmt.Fprintf(&recvStats, "work time: %s\n", time.Now().Sub(startTime))
+	fmt.Fprintf(&recvStats, "receive time: %s\n", time.Now().Sub(recvStart))
+
+	// Because the transaction is send in sync mode, check the mempool to
+	// make sure everything was processed.
+	mempoolTime := time.Now()
+	for {
+		if err := conn.WriteJSON(jsonrpcRequest{ID: 1234567, Version: "2.0", Method: "num_unconfirmed_txs"}); err != nil {
+			return fmt.Errorf("cannot send unconfirmed transaction request: %s", err)
+		}
+		var resp jsonrpcResponse
+		if err := conn.ReadJSON(&resp); err != nil {
+			return fmt.Errorf("cannot read unconfirmed transaction response: %s", err)
+		}
+		if resp.ID != 1234567 {
+			return fmt.Errorf("unexpected response: %+v", resp)
+		}
+		var unconfirmed numUnconfirmedTxs
+		if err := json.Unmarshal(resp.Result, &unconfirmed); err != nil {
+			return fmt.Errorf("cannot unmarshal unconfirmed transactions response: %s", err)
+		}
+		if unconfirmed.Number == "0" {
+			break
+		}
+		// Do not overflow with requests.
+		time.Sleep(time.Second / 4)
+	}
+	fmt.Fprintf(&recvStats, "waiting for transactions commit: %s\n", time.Now().Sub(mempoolTime))
+
+	fmt.Fprintf(&recvStats, "total work time: %s\n", time.Now().Sub(startTime))
 
 	sendStats.WriteTo(output)
 	recvStats.WriteTo(output)
@@ -129,17 +159,16 @@ type jsonrpcResponse struct {
 		Message string `json:"message"`
 		Data    string `json:"data"`
 	} `json:"error"`
-	Result struct {
-		Height  string `json:"height"`
-		CheckTx struct {
-			Code int    `json:"code"`
-			Log  string `json:"log"`
-			Data string `json:"data"`
-		} `json:"check_tx"`
-		DeliverTx struct {
-			Code int    `json:"code"`
-			Log  string `json:"log"`
-			Data string `json:"data"`
-		} `json:"deliver_tx"`
-	} `json:"result"`
+	Result json.RawMessage `json:"result"`
+}
+
+type numUnconfirmedTxs struct {
+	Number string `json:"n_txs"`
+	Total  string `json:"total"`
+}
+
+type checkResult struct {
+	Code int    `json:"code"`
+	Log  string `json:"log"`
+	Data string `json:"data"`
 }

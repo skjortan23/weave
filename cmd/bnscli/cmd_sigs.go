@@ -35,7 +35,8 @@ content.
 			"Tendermint node address. Use proper NETWORK name. You can use BNSCLI_TM_ADDR environment variable to set it.")
 		keyPathFl = fl.String("key", env("BNSCLI_PRIV_KEY", os.Getenv("HOME")+"/.bnsd.priv.key"),
 			"Path to the private key file that transaction should be signed with. You can use BNSCLI_PRIV_KEY environment variable to set it.")
-		seqFl = fl.Int64("seq", 0, "Force use of given sequence number.")
+		seqFl   = fl.Int64("seq", 0, "Force use of given sequence number.")
+		chainFl = fl.String("chain", "", "Force use of given chain ID instead of fetching this infromation from a node.")
 	)
 	fl.Parse(args)
 
@@ -52,11 +53,6 @@ content.
 		return fmt.Errorf("cannot read transaction: %s", err)
 	}
 
-	genesis, err := fetchGenesis(*tmAddrFl)
-	if err != nil {
-		return fmt.Errorf("cannot fetch genesis: %s", err)
-	}
-
 	var seq int64
 	if *seqFl != 0 {
 		seq = *seqFl
@@ -69,7 +65,16 @@ content.
 		}
 	}
 
-	sig, err := sigs.SignTx(key, tx, genesis.ChainID, seq)
+	chainID := *chainFl
+	if chainID == "" {
+		genesis, err := fetchGenesis(*tmAddrFl)
+		if err != nil {
+			return fmt.Errorf("cannot fetch genesis: %s", err)
+		}
+		chainID = genesis.ChainID
+	}
+
+	sig, err := sigs.SignTx(key, tx, chainID, seq)
 	if err != nil {
 		return fmt.Errorf("cannot sign transaction: %s", err)
 	}
