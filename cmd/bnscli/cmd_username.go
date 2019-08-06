@@ -60,6 +60,52 @@ Create a transaction for registering a username.
 	return err
 }
 
+func cmdChangeUsernameTarget(input io.Reader, output io.Writer, args []string) error {
+	fl := flag.NewFlagSet("", flag.ExitOnError)
+	fl.Usage = func() {
+		fmt.Fprintln(flag.CommandLine.Output(), `
+Create a transaction for changin a username target.
+		`)
+		fl.PrintDefaults()
+	}
+	var (
+		nameFl       = fl.String("name", "", "Name part of the username. For example 'alice'")
+		namespaceFl  = fl.String("ns", "iov", "Namespace (domain) part of the username. For example 'iov'")
+		blockchainFl = fl.String("bc", "", "Blockchain network ID.")
+		addressFl    = fl.String("addr", "", "String representation of the blochain address on this network.")
+	)
+	fl.Parse(args)
+
+	uname, err := username.ParseUsername(*nameFl + "*" + *namespaceFl)
+	if err != nil {
+		return fmt.Errorf("given data produce an invalid username: %s", err)
+	}
+	target := username.BlockchainAddress{
+		BlockchainID: *blockchainFl,
+		Address:      *addressFl,
+	}
+	if err := target.Validate(); err != nil {
+		return fmt.Errorf("given data produce an invalid target: %s", err)
+	}
+
+	msg := username.ChangeTokenTargetsMsg{
+		Metadata:   &weave.Metadata{Schema: 1},
+		Username:   uname,
+		NewTargets: []username.BlockchainAddress{target},
+	}
+	if err := msg.Validate(); err != nil {
+		return fmt.Errorf("given data produce an invalid message: %s", err)
+	}
+
+	tx := &bnsd.Tx{
+		Sum: &bnsd.Tx_UsernameChangeTokenTargetsMsg{
+			UsernameChangeTokenTargetsMsg: &msg,
+		},
+	}
+	_, err = writeTx(output, tx)
+	return err
+}
+
 func cmdResolveUsername(input io.Reader, output io.Writer, args []string) error {
 	fl := flag.NewFlagSet("", flag.ExitOnError)
 	fl.Usage = func() {

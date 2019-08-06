@@ -35,6 +35,7 @@ content.
 			"Tendermint node address. Use proper NETWORK name. You can use BNSCLI_TM_ADDR environment variable to set it.")
 		keyPathFl = fl.String("key", env("BNSCLI_PRIV_KEY", os.Getenv("HOME")+"/.bnsd.priv.key"),
 			"Path to the private key file that transaction should be signed with. You can use BNSCLI_PRIV_KEY environment variable to set it.")
+		seqFl = fl.Int64("seq", 0, "Force use of given sequence number.")
 	)
 	fl.Parse(args)
 
@@ -56,17 +57,23 @@ content.
 		return fmt.Errorf("cannot fetch genesis: %s", err)
 	}
 
-	bnsClient := client.NewClient(client.NewHTTPConnection(*tmAddrFl))
-	aNonce := client.NewNonce(bnsClient, key.PublicKey().Address())
-	if seq, err := aNonce.Next(); err != nil {
-		return fmt.Errorf("cannot get the next sequence number: %s", err)
+	var seq int64
+	if *seqFl != 0 {
+		seq = *seqFl
 	} else {
-		sig, err := sigs.SignTx(key, tx, genesis.ChainID, seq)
+		bnsClient := client.NewClient(client.NewHTTPConnection(*tmAddrFl))
+		aNonce := client.NewNonce(bnsClient, key.PublicKey().Address())
+		seq, err = aNonce.Next()
 		if err != nil {
-			return fmt.Errorf("cannot sign transaction: %s", err)
+			return fmt.Errorf("cannot get the next sequence number: %s", err)
 		}
-		tx.Signatures = append(tx.Signatures, sig)
 	}
+
+	sig, err := sigs.SignTx(key, tx, genesis.ChainID, seq)
+	if err != nil {
+		return fmt.Errorf("cannot sign transaction: %s", err)
+	}
+	tx.Signatures = append(tx.Signatures, sig)
 
 	_, err = writeTx(output, tx)
 	return err
